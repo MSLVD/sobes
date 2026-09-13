@@ -42,12 +42,18 @@ def to_bytes(val) -> bytes:
     return bytes.fromhex(str(val).removeprefix("0x"))
 
 
+def to_hex(val) -> str:
+    if isinstance(val, bytes):
+        return "0x" + val.hex()
+    return str(val).lower()
+
+
 def build_balance_calldata(token_type: str, token_id: int, wallet: str) -> str:
     addr_bytes = bytes.fromhex(wallet.removeprefix("0x")).rjust(32, b"\x00")
     if token_type == "ERC20":
         return "0x70a08231" + addr_bytes.hex()
     if token_type == "ERC1155":
-        return "0xf242432a" + addr_bytes.hex() + token_id.to_bytes(32, "big").hex()
+        return "0x00fdd58e" + addr_bytes.hex() + token_id.to_bytes(32, "big").hex()
     raise ValueError(f"Unsupported token type: {token_type}")
 
 
@@ -92,7 +98,7 @@ async def init_db(conn: asyncpg.Connection):
 
 
 def parse_log(log):
-    topics = [str(t).lower() for t in log["topics"]]
+    topics = [to_hex(t) for t in log["topics"]]
     if not topics:
         return []
 
@@ -180,8 +186,10 @@ async def run():
     try:
         async with pool.acquire() as conn:
             await init_db(conn)
+            parsed_rows = 0
             for item in unique_logs:
                 for row in parse_log(item):
+                    parsed_rows += 1
                     await conn.execute(
                         """
                         INSERT INTO wallet_logs (
@@ -202,6 +210,9 @@ async def run():
                         row["to_address"],
                         row["amount"],
                     )
+
+            if unique_logs and parsed_rows == 0:
+                raise RuntimeError(f"RPC returned {len(unique_logs)} logs, but none could be parsed")
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(
