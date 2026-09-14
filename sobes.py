@@ -26,7 +26,7 @@ def parse_args():
         default=os.environ.get("TARGET_WALLET", "0x46b353667fd7d846af3bbeda6584b0e5b883d3de"),
         help="Target address",
     )
-    parser.add_argument("--start-block", type=int, default=int(os.environ.get("START_BLOCK", "55000000")))
+    parser.add_argument("--start-block", type=int, default=int(os.environ.get("START_BLOCK", "0")))
     parser.add_argument("--end-block", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=int(os.environ.get("MAX_LOG_BLOCK_RANGE", "10000")))
     return parser.parse_args()
@@ -72,6 +72,8 @@ async def get_logs_range(w3: AsyncWeb3, filter_params: dict, start_block: int, e
             curr_from = curr_to + 1
             step = min(max_range, step * 2)
         except Exception as err:
+            if getattr(err, "status", None) == 429:
+                raise RuntimeError("RPC rate limit exceeded (HTTP 429); wait and retry or use an authenticated RPC URL") from err
             if step == 1:
                 raise RuntimeError(f"RPC query failed at block {curr_from}") from err
             step = max(1, step // 2)
@@ -152,7 +154,15 @@ async def run():
         sys.exit("Error: Invalid or missing --rpc argument")
 
     w3 = AsyncWeb3(AsyncHTTPProvider(args.rpc))
-    if not await w3.is_connected():
+    try:
+        connected = await w3.is_connected()
+    except Exception as err:
+        await w3.provider.disconnect()
+        if getattr(err, "status", None) == 429:
+            sys.exit("Error: RPC rate limit exceeded (HTTP 429); wait and retry or use an authenticated RPC URL")
+        raise
+    if not connected:
+        await w3.provider.disconnect()
         sys.exit("Error: RPC connection failed")
 
     wallet = args.wallet.lower()
@@ -162,6 +172,8 @@ async def run():
 
     if end_b < start_b:
         sys.exit("Error: end_block < start_block")
+    if args.batch_size < 1:
+        sys.exit("Error: batch-size must be positive")
 
     queries = [
         {"topics": [TOPIC_TRANSFER, padded]},
@@ -172,10 +184,11 @@ async def run():
         {"topics": [TOPIC_TRANSFER_BATCH, None, None, padded]},
     ]
 
-    fetched = []
-    for q in queries:
-        res = await get_logs_range(w3, q, start_b, end_b, args.batch_size)
-        fetched.extend(res)
+    query_results = await asyncio.gather(
+        *(get_logs_range(w3, q, start_b, end_b, args.batch_size) for q in queries)
+    )
+    fetched = [log for result in query_results for log in result]
+    print(f"RPC logs fetched: {len(fetched)}")
 
     unique_logs = sorted(
         {(str(x["transactionHash"]), x["logIndex"]): x for x in fetched}.values(),
@@ -186,6 +199,7 @@ async def run():
     try:
         async with pool.acquire() as conn:
             await init_db(conn)
+            await conn.execute("TRUNCATE TABLE wallet_logs")
             parsed_rows = 0
             for item in unique_logs:
                 for row in parse_log(item):
@@ -211,7 +225,9 @@ async def run():
                         row["amount"],
                     )
 
-            if unique_logs and parsed_rows == 0:
+            if not unique_logs:
+                raise RuntimeError("RPC returned no logs for the selected wallet and block range")
+            if parsed_rows == 0:
                 raise RuntimeError(f"RPC returned {len(unique_logs)} logs, but none could be parsed")
 
         async with pool.acquire() as conn:
@@ -225,7 +241,7 @@ async def run():
                 FROM wallet_logs
                 WHERE from_address = $1 OR to_address = $1
                 GROUP BY contract_address, token_type, token_id
-                HAVING SUM(CASE WHEN to_address = $1 THEN amount ELSE -amount END) > 0;
+                ORDER BY contract_address, token_type, token_id;
             """,
                 wallet,
             )
@@ -244,7 +260,8 @@ async def run():
                         f"Mismatch for {r['contract_address']}:{r['token_id']} - db={calc_bal}, chain={onchain_bal}"
                     )
 
-                print(f"Contract: {r['contract_address']} | TokenID: {r['token_id']} | Balance: {calc_bal}")
+                if onchain_bal > 0:
+                    print(f"Contract: {r['contract_address']} | TokenID: {r['token_id']} | Balance: {onchain_bal}")
     finally:
         await pool.close()
 

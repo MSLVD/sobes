@@ -47,7 +47,7 @@ All options can be provided as command-line arguments or through the correspondi
 | `--rpc` | `POLYGON_RPC_URL` | empty |
 | `--db` | `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/polymarket_db` |
 | `--wallet` | `TARGET_WALLET` | `0x46b353667fd7d846af3bbeda6584b0e5b883d3de` |
-| `--start-block` | `START_BLOCK` | `55000000` |
+| `--start-block` | `START_BLOCK` | `0` |
 | `--end-block` | none | latest Polygon block |
 | `--batch-size` | `MAX_LOG_BLOCK_RANGE` | `10000` |
 
@@ -62,11 +62,13 @@ python3 sobes.py \
 
 For a complete historical scan, choose `--start-block` no later than the wallet's first relevant activity. The allowed batch size depends on the RPC provider's plan and limits.
 
+Each run refreshes `wallet_logs` as a single-wallet snapshot. This prevents events from an earlier range or wallet from affecting the current balance calculation.
+
 ## Output and verification
 
 Transfer events are stored in `wallet_logs`. The final balances are printed as raw token amounts. Each positive balance is queried directly from its contract using `balanceOf` or `balanceOf(address,uint256)` and the script exits with an error if the calculated value differs from the on-chain value at `--end-block`.
 
-The script processes ERC-20 `Transfer`, ERC-1155 `TransferSingle`, and ERC-1155 `TransferBatch` events involving the selected wallet.
+The script processes ERC-20 `Transfer`, ERC-1155 `TransferSingle`, and ERC-1155 `TransferBatch` events involving the selected wallet. It verifies every token aggregate found in the transfer history, including zero balances, against the contract at `--end-block`.
 
 ## Security
 
