@@ -168,7 +168,7 @@ def parse_log(log):
     return [
         {
             "block_number": log["blockNumber"],
-            "tx_hash": str(log["transactionHash"]),
+            "tx_hash": to_hex(log["transactionHash"]),
             "log_index": log["logIndex"],
             "contract_address": str(log["address"]).lower(),
             "event_type": event_type,
@@ -234,7 +234,7 @@ async def run():
 
         unique_logs = {}
         for item in fetched:
-            key = (str(item["blockHash"]), str(item["transactionHash"]), item["logIndex"])
+            key = (to_hex(item["blockHash"]), to_hex(item["transactionHash"]), item["logIndex"])
             previous = unique_logs.setdefault(key, item)
             if previous != item:
                 raise RuntimeError(f"Conflicting RPC responses for log {key}")

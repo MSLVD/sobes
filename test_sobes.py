@@ -38,6 +38,15 @@ def base_log(topics, data):
 
 
 class ParseLogTests(unittest.TestCase):
+    def test_transaction_hash_bytes_are_stored_as_hex(self):
+        log = base_log(
+            [TOPIC_TRANSFER, topic_address(OTHER), topic_address(WALLET)],
+            "0x" + (7).to_bytes(32, "big").hex(),
+        )
+        log["transactionHash"] = bytes.fromhex(TX_HASH.removeprefix("0x"))
+        rows = parse_log(log)
+        self.assertEqual(rows[0]["tx_hash"], TX_HASH)
+
     def test_erc20_transfer(self):
         log = base_log(
             [TOPIC_TRANSFER, topic_address(OTHER), topic_address(WALLET)],
